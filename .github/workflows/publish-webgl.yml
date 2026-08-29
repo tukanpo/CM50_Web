@@ -60,8 +60,8 @@ jobs:
           cat > "$askpass_path" <<'ASKPASS'
           #!/bin/sh
           case "$1" in
-          *Username*) printf '%s\\n' "$GITLAB_DEPLOY_USER" ;;
-          *Password*) printf '%s\\n' "$GITLAB_DEPLOY_TOKEN" ;;
+          *Username*) printf '%s\n' "$GITLAB_DEPLOY_USER" ;;
+          *Password*) printf '%s\n' "$GITLAB_DEPLOY_TOKEN" ;;
           esac
           ASKPASS
           chmod 700 "$askpass_path"
