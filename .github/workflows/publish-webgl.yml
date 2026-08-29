@@ -1,4 +1,5 @@
 name: Build and deploy CM50 WebGL
+run-name: Publish CM50 ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.cm50_ref || inputs.cm50_ref }}
 
 on:
   repository_dispatch:
