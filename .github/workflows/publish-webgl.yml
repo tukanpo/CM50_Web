@@ -1,4 +1,5 @@
 name: Build and deploy CM50 WebGL
+run-name: Publish CM50 ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.cm50_ref || inputs.cm50_ref }}
 
 on:
   repository_dispatch:
@@ -51,14 +52,25 @@ jobs:
         run: |
           test -n "${GITLAB_DEPLOY_USER:-}"
           test -n "${GITLAB_DEPLOY_TOKEN:-}"
+          askpass_path="$(mktemp)"
+          cleanup_askpass() {
+            rm -f "$askpass_path"
+          }
+          trap cleanup_askpass EXIT
+          cat > "$askpass_path" <<'ASKPASS'
+          #!/bin/sh
+          case "$1" in
+          *Username*) printf '%s\n' "$GITLAB_DEPLOY_USER" ;;
+          *Password*) printf '%s\n' "$GITLAB_DEPLOY_TOKEN" ;;
+          esac
+          ASKPASS
+          chmod 700 "$askpass_path"
+
           mkdir -p source
           git -C source init
-          git -C source remote add origin "https://${GITLAB_DEPLOY_USER}:${GITLAB_DEPLOY_TOKEN}@gitlab.com/Tukanpo/cm50.git"
-          cleanup_remote() {
-            git -C source remote set-url origin "https://gitlab.com/Tukanpo/cm50.git" 2>/dev/null || true
-          }
-          trap cleanup_remote EXIT
-          git -C source fetch --depth 1 origin refs/heads/main
+          git -C source remote add origin "https://gitlab.com/Tukanpo/cm50.git"
+          GIT_TERMINAL_PROMPT=0 GIT_ASKPASS="$askpass_path" \
+            git -C source fetch --depth 1 origin refs/heads/main
           test "$(git -C source rev-parse FETCH_HEAD)" = "$CM50_REF"
           git -C source checkout --detach FETCH_HEAD
           test "$(git -C source rev-parse HEAD)" = "$CM50_REF"
