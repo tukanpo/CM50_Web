@@ -1,0 +1,123 @@
+name: Build and deploy CM50 WebGL
+
+on:
+  repository_dispatch:
+    types:
+      - publish-webgl
+  workflow_dispatch:
+    inputs:
+      cm50_ref:
+        description: Full 40-character commit SHA from Tukanpo/cm50
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pages: read
+
+concurrency:
+  group: cm50-webgl-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build WebGL
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    container:
+      image: unityci/editor:ubuntu-6000.5.0f1-webgl-3.2.2
+    environment:
+      name: cm50-release-build
+    env:
+      CM50_REF: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.cm50_ref || inputs.cm50_ref }}
+      UNITY_PROJECT_PATH: ${{ github.workspace }}/source/CM50_Unity
+      WEBGL_OUTPUT_PATH: ${{ github.workspace }}/public
+
+    steps:
+      - name: Validate source commit
+        shell: bash
+        run: |
+          if [[ ! "$CM50_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "cm50_ref must be a full lowercase 40-character commit SHA." >&2
+            exit 1
+          fi
+
+      - name: Fetch private CM50 source
+        shell: bash
+        env:
+          GITLAB_DEPLOY_USER: ${{ secrets.GITLAB_DEPLOY_USER }}
+          GITLAB_DEPLOY_TOKEN: ${{ secrets.GITLAB_DEPLOY_TOKEN }}
+        run: |
+          test -n "${GITLAB_DEPLOY_USER:-}"
+          test -n "${GITLAB_DEPLOY_TOKEN:-}"
+          mkdir -p source
+          git -C source init
+          git -C source remote add origin "https://${GITLAB_DEPLOY_USER}:${GITLAB_DEPLOY_TOKEN}@gitlab.com/Tukanpo/cm50.git"
+          cleanup_remote() {
+            git -C source remote set-url origin "https://gitlab.com/Tukanpo/cm50.git" 2>/dev/null || true
+          }
+          trap cleanup_remote EXIT
+          git -C source fetch --depth 1 origin refs/heads/main
+          test "$(git -C source rev-parse FETCH_HEAD)" = "$CM50_REF"
+          git -C source checkout --detach FETCH_HEAD
+          test "$(git -C source rev-parse HEAD)" = "$CM50_REF"
+
+      - name: Activate Unity license
+        shell: bash
+        env:
+          UNITY_SERIAL: ${{ secrets.UNITY_SERIAL }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+        run: |
+          test -n "${UNITY_SERIAL:-}"
+          test -n "${UNITY_EMAIL:-}"
+          test -n "${UNITY_PASSWORD:-}"
+          unity-editor \
+            -quit \
+            -batchmode \
+            -nographics \
+            -logFile /dev/stdout \
+            -serial "$UNITY_SERIAL" \
+            -username "$UNITY_EMAIL" \
+            -password "$UNITY_PASSWORD"
+
+      - name: Build release WebGL player
+        shell: bash
+        run: |
+          mkdir -p "$WEBGL_OUTPUT_PATH"
+          unity-editor \
+            -quit \
+            -batchmode \
+            -nographics \
+            -projectPath "$UNITY_PROJECT_PATH" \
+            -buildTarget WebGL \
+            -executeMethod App.TacticsPresentation.Unity.Editor.FirstGamePlayerBuildCommand.Run \
+            -cm50PlayerTarget WebGL \
+            -cm50PlayerOutput "$WEBGL_OUTPUT_PATH" \
+            -cm50PlayerConfiguration Release \
+            -logFile /dev/stdout
+          test -f "$WEBGL_OUTPUT_PATH/index.html"
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
+
+      - name: Upload GitHub Pages artifact
+        uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
+        with:
+          path: public
+
+  deploy:
+    name: Deploy GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
