@@ -1,4 +1,4 @@
-name: Build and deploy CM50 WebGL
+name: Build and deploy CM50 public site
 run-name: Publish CM50 ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.cm50_ref || inputs.cm50_ref }}
 
 on:
@@ -21,8 +21,87 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  introduction:
+    name: Build technical introduction and diagrams
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: cm50-release-build
+    env:
+      CM50_REF: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.cm50_ref || inputs.cm50_ref }}
+    steps:
+      - name: Validate source commit
+        shell: bash
+        run: |
+          if [[ ! "$CM50_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "cm50_ref must be a full lowercase 40-character commit SHA." >&2
+            exit 1
+          fi
+
+      - name: Fetch private CM50 source
+        shell: bash
+        env:
+          GITLAB_DEPLOY_USER: ${{ secrets.GITLAB_DEPLOY_USER }}
+          GITLAB_DEPLOY_TOKEN: ${{ secrets.GITLAB_DEPLOY_TOKEN }}
+        run: |
+          test -n "${GITLAB_DEPLOY_USER:-}"
+          test -n "${GITLAB_DEPLOY_TOKEN:-}"
+          askpass_path="$(mktemp)"
+          cleanup_askpass() {
+            rm -f "$askpass_path"
+          }
+          trap cleanup_askpass EXIT
+          cat > "$askpass_path" <<'ASKPASS'
+          #!/bin/sh
+          case "$1" in
+          *Username*) printf '%s\n' "$GITLAB_DEPLOY_USER" ;;
+          *Password*) printf '%s\n' "$GITLAB_DEPLOY_TOKEN" ;;
+          esac
+          ASKPASS
+          chmod 700 "$askpass_path"
+
+          mkdir -p source
+          git -C source init
+          git -C source remote add origin "https://gitlab.com/Tukanpo/cm50.git"
+          GIT_TERMINAL_PROMPT=0 GIT_ASKPASS="$askpass_path" \
+            git -C source fetch --depth 1 origin refs/heads/main
+          test "$(git -C source rev-parse FETCH_HEAD)" = "$CM50_REF"
+          git -C source checkout --detach FETCH_HEAD
+          test "$(git -C source rev-parse HEAD)" = "$CM50_REF"
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+
+      - name: Build introduction and diagrams from the release source
+        working-directory: source
+        shell: bash
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.6.0 --activate
+          pnpm install --frozen-lockfile
+          pnpm run architecture:generate
+          docker run --rm --volume "$PWD:/workspace" \
+            --entrypoint /usr/local/structurizr.sh \
+            structurizr/structurizr:2026.10.26-noble \
+            export -w /workspace/docs/architecture/workspace.dsl \
+            -f static -o /workspace/docs/public/architecture/structurizr
+          pnpm run public:test
+          pnpm run public:build
+
+      - name: Upload introduction output
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cm50-introduction
+          path: source/public-site/.vitepress/dist
+          if-no-files-found: error
+          retention-days: 1
+
   build:
-    name: Build WebGL
+    name: Build WebGL and assemble site
+    needs: introduction
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -33,7 +112,7 @@ jobs:
     env:
       CM50_REF: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.cm50_ref || inputs.cm50_ref }}
       UNITY_PROJECT_PATH: ${{ github.workspace }}/source/CM50_Unity
-      WEBGL_OUTPUT_PATH: ${{ github.workspace }}/public
+      WEBGL_OUTPUT_PATH: ${{ github.workspace }}/public/play
 
     steps:
       - name: Validate source commit
@@ -110,6 +189,20 @@ jobs:
             -cm50PlayerConfiguration Release \
             -logFile /dev/stdout
           test -f "$WEBGL_OUTPUT_PATH/index.html"
+
+      - name: Add technical introduction and diagrams
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: cm50-introduction
+          path: public
+
+      - name: Check complete site
+        shell: bash
+        run: |
+          test -f public/index.html
+          test -f public/play/index.html
+          test -f public/architecture/structurizr/index.html
+          test -f public/architecture/structurizr/workspace.js
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
