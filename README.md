@@ -1,13 +1,20 @@
 # CM50 WebGL deployment
 
 This public repository contains only the automation used to build and publish
-the CM50 WebGL player. The private CM50 source and developer documentation are
-not mirrored here.
+the CM50 public site: the WebGL player, technical introduction and architecture
+diagrams. The private CM50 source and developer documentation are not mirrored
+here.
 
 The workflow accepts a full commit SHA from `Tukanpo/cm50`, requires it to
 match the current `main` tip, checks out exactly that commit with read-only
-GitLab deploy credentials, builds the Unity WebGL player, and publishes only
-the generated player to GitHub Pages.
+GitLab deploy credentials, builds the introduction and diagrams plus the Unity
+WebGL player from the same source commit, and publishes the generated site to
+GitHub Pages.
+
+The site root contains the introduction; the player lives at `play/`.
+The canonical workflow source is `tools/github/publish-webgl.yml` in the
+private GitLab repository. Keep this repository's workflow identical when
+updating the publication process. Introduction source files remain on GitLab.
 
 ## Required release-build environment
 
